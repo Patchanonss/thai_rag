@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Thai RAG</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 800px;
+        margin: 40px auto;
+        padding: 0 20px;
+      }
+      .upload-section,
+      .chat-section {
+        margin-bottom: 30px;
+      }
+      .file-list {
+        background: #f5f5f5;
+        padding: 10px;
+        border-radius: 8px;
+        margin: 10px 0;
+      }
+      .file-item {
+        padding: 4px 0;
+        color: #333;
+        font-size: 14px;
+      }
+      input[type="text"] {
+        width: 80%;
+        padding: 8px;
+        font-size: 16px;
+      }
+      button {
+        padding: 8px 16px;
+        background: #2563eb;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #1d4ed8;
+      }
+      .message {
+        margin: 10px 0;
+        padding: 10px;
+        border-radius: 8px;
+      }
+      .user {
+        background: #dbeafe;
+        text-align: right;
+      }
+      .bot {
+        background: #f0fdf4;
+      }
+      .sources {
+        font-size: 12px;
+        color: #666;
+        margin-top: 6px;
+      }
+      #chat-box {
+        height: 400px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        padding: 10px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>🇹🇭 Thai RAG — Document Q&A</h2>
+
+    <!-- Upload Section -->
+    <div class="upload-section">
+      <h3>📄 Upload PDF</h3>
+      <input type="file" id="pdf-input" accept=".pdf" />
+      <button onclick="uploadPDF()">Upload</button>
+      <div id="upload-status"></div>
+      <div class="file-list">
+        <strong>เอกสารที่ upload แล้ว:</strong>
+        <div id="file-list">ยังไม่มีเอกสาร</div>
+      </div>
+    </div>
+
+    <!-- Chat Section -->
+    <div class="chat-section">
+      <h3>💬 ถามคำถาม</h3>
+      <div id="chat-box"></div>
+      <input
+        type="text"
+        id="question-input"
+        placeholder="พิมพ์คำถาม..."
+        onkeydown="if (event.key === 'Enter') ask();"
+      />
+      <button onclick="ask()">ถาม</button>
+    </div>
+
+    <script>
+      const API = "http://localhost:8000";
+      const uploadedFiles = [];
+
+      async function uploadPDF() {
+        const file = document.getElementById("pdf-input").files[0];
+        if (!file) return alert("เลือกไฟล์ก่อน");
+
+        const status = document.getElementById("upload-status");
+        status.textContent = "⏳ กำลัง upload...";
+
+        const form = new FormData();
+        form.append("file", file);
+
+        try {
+          const res = await fetch(`${API}/ingest`, {
+            method: "POST",
+            body: form,
+          });
+          const data = await res.json();
+          status.textContent = `✅ ${data.message}`;
+
+          uploadedFiles.push(file.name);
+          document.getElementById("file-list").innerHTML = uploadedFiles
+            .map((f) => `<div class="file-item">📄 ${f}</div>`)
+            .join("");
+        } catch (e) {
+          status.textContent = "❌ Upload ล้มเหลว";
+        }
+      }
+
+      async function ask() {
+        const input = document.getElementById("question-input");
+        const question = input.value.trim();
+        if (!question) return;
+
+        addMessage(question, "user");
+        input.value = "";
+
+        try {
+          const res = await fetch(`${API}/query`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question }),
+          });
+          const data = await res.json();
+
+          const sources = data.sources
+            .map((s) => `${s.source} หน้า ${s.page} (score: ${s.score})`)
+            .join(" | ");
+
+          addMessage(data.answer, "bot", sources);
+        } catch (e) {
+          addMessage("❌ เกิดข้อผิดพลาด", "bot");
+        }
+      }
+
+      function addMessage(text, type, sources = "") {
+        const box = document.getElementById("chat-box");
+        const div = document.createElement("div");
+        div.className = `message ${type}`;
+        div.innerHTML = `<div>${text}</div>`;
+        if (sources)
+          div.innerHTML += `<div class="sources">📎 ${sources}</div>`;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+      }
+    </script>
+  </body>
+</html>
