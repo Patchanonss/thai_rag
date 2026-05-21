@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from app.query import query_rag
 from pydantic import BaseModel
@@ -19,17 +19,25 @@ def health():
     return {"status": "ok"}
 
 @app.post("/ingest")
-async def ingest(file: UploadFile = File(...)):
+async def ingest(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     # save ไฟล์ชั่วคราวก่อน
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(await file.read())
         tmp_path = tmp.name
 
-    try:
-        count = ingest_pdf(tmp_path, file.filename)
-        return {"message": f"ingested {count} chunks", "filename": file.filename}
-    finally:
-        os.unlink(tmp_path)  # ลบไฟล์ temp ทิ้ง
+    def run_and_cleanup():
+        try:
+            count = ingest_pdf(tmp_path, file.filename)
+            print(f"✅ ingest เสร็จ: {count} chunks")
+        except Exception as e:
+            print(f"❌ ingest error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            os.unlink(tmp_path)
+
+    background_tasks.add_task(run_and_cleanup)
+    return {"message": "กำลัง ingest อยู่ ดู progress ที่ docker logs", "filename": file.filename}
 
 class QuestionRequest(BaseModel):
     question: str

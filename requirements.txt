@@ -10,3 +10,8 @@ langchain-community
 python-multipart
 fastembed[sparse]
 flashrank
+ragas
+datasets
+langchain-groq
+langchain-community
+instructor

@@ -1,6 +1,7 @@
 # PDF -> chunk -> embed (dense + sparse) -> store
 import fitz  # PyMuPDF
-from fastembed import TextEmbedding, SparseTextEmbedding
+from fastembed import TextEmbedding
+from fastembed.sparse.bm25 import Bm25
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, SparseVectorParams,
@@ -13,7 +14,7 @@ from app.config import (
 import uuid
 
 dense_embedder = TextEmbedding(EMBEDDING_MODEL)
-sparse_embedder = SparseTextEmbedding("prithivida/Splade_PP_en_v1")
+sparse_embedder = Bm25("Qdrant/bm25")
 client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 
@@ -65,36 +66,48 @@ def ensure_collection():
         )
 
 
+UPSERT_BATCH_SIZE = 64
+
+
 def ingest_pdf(pdf_path: str, filename: str) -> int:
     """Main function — รับ path ของ PDF แล้ว ingest เข้า Qdrant"""
     ensure_collection()
 
     pages = extract_text(pdf_path)
     chunks = chunk_text(pages)
-    texts = [c["text"] for c in chunks]
+    total = len(chunks)
+    print(f"📄 {filename}: {total} chunks, processing in batches of {UPSERT_BATCH_SIZE}")
 
-    # embed dense และ sparse พร้อมกัน
-    dense_vectors = [v.tolist() for v in dense_embedder.embed(texts)]
-    sparse_vectors = list(sparse_embedder.embed(texts))
+    for batch_start in range(0, total, UPSERT_BATCH_SIZE):
+        batch = chunks[batch_start: batch_start + UPSERT_BATCH_SIZE]
+        texts = [c["text"] for c in batch]
 
-    points = [
-        PointStruct(
-            id=chunks[i]["chunk_id"],
-            vector={
-                "dense": dense_vectors[i],
-                "sparse": SparseVector(
-                    indices=sparse_vectors[i].indices.tolist(),
-                    values=sparse_vectors[i].values.tolist()
-                )
-            },
-            payload={
-                "text": chunks[i]["text"],
-                "page": chunks[i]["page"],
-                "source": filename
-            }
-        )
-        for i in range(len(chunks))
-    ]
+        print(f"  🔢 dense embedding batch {batch_start}...", flush=True)
+        dense_vectors = [v.tolist() for v in dense_embedder.embed(texts, parallel=0)]
+        print(f"  🔢 sparse embedding batch {batch_start}...", flush=True)
+        sparse_vectors = list(sparse_embedder.embed(texts, parallel=0))
+        print(f"  📤 upserting batch {batch_start}...", flush=True)
 
-    client.upsert(collection_name=COLLECTION_NAME, points=points)
-    return len(chunks)
+        points = [
+            PointStruct(
+                id=batch[i]["chunk_id"],
+                vector={
+                    "dense": dense_vectors[i],
+                    "sparse": SparseVector(
+                        indices=sparse_vectors[i].indices.tolist(),
+                        values=sparse_vectors[i].values.tolist()
+                    )
+                },
+                payload={
+                    "text": batch[i]["text"],
+                    "page": batch[i]["page"],
+                    "source": filename
+                }
+            )
+            for i in range(len(batch))
+        ]
+
+        client.upsert(collection_name=COLLECTION_NAME, points=points)
+        print(f"  ✅ upserted {batch_start + len(batch)}/{total}")
+
+    return total
