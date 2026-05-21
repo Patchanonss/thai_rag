@@ -30,21 +30,46 @@ def extract_text(pdf_path: str) -> list[dict]:
 
 
 def chunk_text(pages: list[dict]) -> list[dict]:
-    """ตัด text เป็น chunks พร้อม metadata"""
+    """ตัด text เป็น chunks โดยรักษาขอบเขตย่อหน้า"""
     chunks = []
     for page in pages:
-        text = page["text"]
-        start = 0
-        while start < len(text):
-            end = start + CHUNK_SIZE
-            chunk = text[start:end]
-            if chunk.strip():
-                chunks.append({
-                    "chunk_id": str(uuid.uuid4()),
-                    "page": page["page"],
-                    "text": chunk
-                })
-            start += CHUNK_SIZE - CHUNK_OVERLAP
+        paragraphs = [p.strip() for p in page["text"].split("\n\n") if p.strip()]
+
+        current = ""
+        for para in paragraphs:
+            if len(current) + len(para) + 2 <= CHUNK_SIZE:
+                current = (current + "\n\n" + para).strip()
+            else:
+                if current:
+                    chunks.append({
+                        "chunk_id": str(uuid.uuid4()),
+                        "page": page["page"],
+                        "text": current
+                    })
+                # paragraph longer than CHUNK_SIZE — split by sentence
+                if len(para) > CHUNK_SIZE:
+                    sentences = [s.strip() for s in para.replace("。", ".").split(".") if s.strip()]
+                    current = ""
+                    for sent in sentences:
+                        if len(current) + len(sent) + 2 <= CHUNK_SIZE:
+                            current = (current + ". " + sent).strip()
+                        else:
+                            if current:
+                                chunks.append({
+                                    "chunk_id": str(uuid.uuid4()),
+                                    "page": page["page"],
+                                    "text": current
+                                })
+                            current = sent
+                else:
+                    current = para
+
+        if current:
+            chunks.append({
+                "chunk_id": str(uuid.uuid4()),
+                "page": page["page"],
+                "text": current
+            })
     return chunks
 
 
@@ -83,9 +108,11 @@ def ingest_pdf(pdf_path: str, filename: str) -> int:
         texts = [c["text"] for c in batch]
 
         print(f"  🔢 dense embedding batch {batch_start}...", flush=True)
-        dense_vectors = [v.tolist() for v in dense_embedder.embed(texts, parallel=0)]
+        dense_vectors = [v.tolist() for v in dense_embedder.embed(texts)]
+        print(f"  ✅ dense embedding batch {batch_start} done", flush=True)
         print(f"  🔢 sparse embedding batch {batch_start}...", flush=True)
-        sparse_vectors = list(sparse_embedder.embed(texts, parallel=0))
+        sparse_vectors = list(sparse_embedder.embed(texts))
+        print(f"  ✅ sparse embedding batch {batch_start} done", flush=True)
         print(f"  📤 upserting batch {batch_start}...", flush=True)
 
         points = [
@@ -107,7 +134,9 @@ def ingest_pdf(pdf_path: str, filename: str) -> int:
             for i in range(len(batch))
         ]
 
+        print(f"  📦 calling client.upsert batch {batch_start}...", flush=True)
         client.upsert(collection_name=COLLECTION_NAME, points=points)
-        print(f"  ✅ upserted {batch_start + len(batch)}/{total}")
+        print(f"  ✅ upserted {batch_start + len(batch)}/{total}", flush=True)
+        print(f"  ➡️ moving to next batch or finishing", flush=True)
 
     return total

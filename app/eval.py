@@ -5,6 +5,7 @@ from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings.base import BaseRagasEmbedding
 from ragas.run_config import RunConfig
 from langchain_groq import ChatGroq
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from fastembed import TextEmbedding
 from app.config import GROQ_API_KEY, EMBEDDING_MODEL, EVAL_LLM_MODEL
 from app.query import query_rag
@@ -35,16 +36,21 @@ TEST_QUESTIONS = [
 ]
 
 def run_eval():
-    llm = LangchainLLMWrapper(ChatGroq(api_key=GROQ_API_KEY, model=EVAL_LLM_MODEL), bypass_n=True)
+    rate_limiter = InMemoryRateLimiter(requests_per_second=0.3)  # ~18 RPM, safe under 30
+    llm = LangchainLLMWrapper(ChatGroq(api_key=GROQ_API_KEY, model=EVAL_LLM_MODEL, rate_limiter=rate_limiter, max_tokens=2048), bypass_n=True)
     embeddings = FastEmbedRagas()
 
     samples = []
     for q in TEST_QUESTIONS:
         result = query_rag(q)
+        contexts = [s["text"] for s in result["sources"]][:3]
+        print(f"\n--- Q: {q}")
+        print(f"A: {result['answer']}")
+        print(f"CONTEXT[0]: {contexts[0][:300]}...")
         samples.append(SingleTurnSample(
             user_input=q,
             response=result["answer"],
-            retrieved_contexts=[s["text"] for s in result["sources"]][:3],
+            retrieved_contexts=contexts,
         ))
 
     dataset = EvaluationDataset(samples=samples)
